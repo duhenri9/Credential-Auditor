@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: false
@@ -40,7 +40,7 @@ jobs:
       - name: Build integration fixture repositories
         run: |
           set -euo pipefail
-          mkdir -p artifacts/repos/clean artifacts/repos/history artifacts/nonrepo
+          mkdir -p artifacts/repos/clean artifacts/repos/history
 
           for repo in artifacts/repos/clean artifacts/repos/history; do
             git -C "$repo" init -b main
@@ -73,8 +73,9 @@ jobs:
 
       - name: Prove incomplete-scope indeterminate control
         run: |
+          nonrepo=$(mktemp -d)
           set +e
-          bin/credential-auditor --repo artifacts/nonrepo --out artifacts/indeterminate-report.json
+          bin/credential-auditor --repo "$nonrepo" --out artifacts/indeterminate-report.json
           status=$?
           set -e
           test "$status" -eq 3
@@ -89,6 +90,7 @@ jobs:
           assert clean["outcome"] == "PASS"
           assert clean["reachable_objects"] > 0
           assert clean["reachable_blobs"] > 0
+          assert "refs/heads/main" in clean["refs"]
 
           history = json.loads(Path("artifacts/history-report.json").read_text())
           assert history["outcome"] == "FINDINGS"
