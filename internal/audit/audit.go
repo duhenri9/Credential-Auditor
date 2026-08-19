@@ -184,7 +184,7 @@ func scanStaged(ctx context.Context, root string, report *Report) {
 }
 
 func scanRefs(ctx context.Context, root string, report *Report) {
-	output, err := git(ctx, root, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/tags")
+	output, err := git(ctx, root, "for-each-ref", "--format=%(refname)")
 	if err != nil {
 		report.Errors = appendError(report.Errors, "ref enumeration failed")
 		return
@@ -281,6 +281,13 @@ func digestReport(report Report) string {
 	return hex.EncodeToString(digest[:])
 }
 
+func indeterminateReport(report Report, reason string) Report {
+	report.Outcome = Indeterminate
+	report.Errors = append(report.Errors, reason)
+	report.ReportSHA256 = digestReport(report)
+	return report
+}
+
 func AuditRepository(ctx context.Context, root string) Report {
 	report := Report{
 		Schema:        "credential-auditor.report.v0",
@@ -294,10 +301,16 @@ func AuditRepository(ctx context.Context, root string) Report {
 
 	inside, err := git(ctx, root, "rev-parse", "--is-inside-work-tree")
 	if err != nil || strings.TrimSpace(string(inside)) != "true" {
-		report.Outcome = Indeterminate
-		report.Errors = append(report.Errors, "path is not an accessible Git worktree")
-		report.ReportSHA256 = digestReport(report)
-		return report
+		return indeterminateReport(report, "path is not an accessible Git worktree")
+	}
+
+	topLevel, topErr := git(ctx, root, "rev-parse", "--show-toplevel")
+	if topErr != nil {
+		return indeterminateReport(report, "repository top-level path could not be resolved")
+	}
+	root = strings.TrimSpace(string(topLevel))
+	if root == "" {
+		return indeterminateReport(report, "repository top-level path is empty")
 	}
 
 	if head, headErr := git(ctx, root, "rev-parse", "HEAD"); headErr == nil {
