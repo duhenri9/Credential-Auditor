@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-const fixtureSecret = "CA_TEST_SECRET_ABCDEFGHIJKLMNOP"
+const fixtureSecret = "CA_TEST_SECRET_" + "ABCDEFGHIJKLMNOP"
 
 func runGit(t *testing.T, root string, args ...string) {
 	t.Helper()
