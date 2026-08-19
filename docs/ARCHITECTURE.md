@@ -6,8 +6,8 @@ Credential Auditor treats **scan coverage** as evidence, not as an implied guara
 Git worktree
    ├─ current tracked + untracked non-ignored files
    ├─ staged content
-   ├─ local branches/tags
-   └─ objects reachable from fetched refs
+   ├─ all refs present in the local repository
+   └─ objects reachable from those fetched/local refs
               ↓
         detector registry
               ↓
@@ -20,16 +20,18 @@ Git worktree
 
 ## Repository scope
 
+V0 first resolves the containing worktree to its canonical Git top-level directory. Passing a nested directory therefore audits the containing repository rather than joining Git-relative paths to the wrong filesystem root.
+
 V0 asks Git directly for:
 
 - current tracked/untracked non-ignored paths via `git ls-files`;
 - staged paths and index content;
-- local `refs/heads/*` and `refs/tags/*`;
+- every ref currently present in the local repository via `git for-each-ref`;
 - objects reachable from `git rev-list --objects --all`.
 
-For each reachable object V0 checks its type and scans reachable blobs. A blob deleted from the current tree can therefore still produce a historical finding.
+Using the same local ref universe for the report and for `rev-list --all` keeps the coverage evidence aligned. This can include fetched remote-tracking refs when they exist locally. It does **not** claim to cover remote refs that were never fetched into the repository.
 
-The report records the refs and object/blob counts it actually saw. It does **not** claim to cover remote refs that were never fetched into the local repository.
+For each reachable object V0 checks its type and scans reachable blobs. A blob deleted from the current tree can therefore still produce a historical finding.
 
 ## Detector model
 
