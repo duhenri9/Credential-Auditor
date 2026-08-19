@@ -24,10 +24,11 @@ working tree + staged files + local refs + reachable Git objects
 
 ### What V0 proves
 
+- canonicalisation to the containing Git worktree root;
 - current tracked and untracked non-ignored file scanning;
 - staged/index content scanning;
-- local branch/tag enumeration;
-- inspection of blobs reachable from fetched Git refs;
+- enumeration of all refs currently present in the local repository;
+- inspection of blobs reachable from those fetched/local refs;
 - detection of a synthetic secret that exists only in historical Git data after deletion from HEAD;
 - a small explicit detector registry;
 - credential-shaped path evidence;
@@ -63,7 +64,7 @@ Exit codes:
 The JSON report records:
 
 - HEAD identity when available;
-- local branches/tags observed;
+- all refs observed locally;
 - configured detector ids;
 - working/staged file counts;
 - reachable object/blob counts;
