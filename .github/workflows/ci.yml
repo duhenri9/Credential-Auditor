@@ -1,0 +1,115 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Format check
+        run: test -z "$(gofmt -l .)"
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./... -count=1
+
+      - name: Build CLI
+        run: go build -trimpath -o bin/credential-auditor ./cmd/credential-auditor
+
+      - name: Build integration fixture repositories
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/repos/clean artifacts/repos/history
+
+          for repo in artifacts/repos/clean artifacts/repos/history; do
+            git -C "$repo" init -b main
+            git -C "$repo" config user.email fixture@example.invalid
+            git -C "$repo" config user.name "Credential Auditor Fixture"
+            printf 'clean fixture\n' > "$repo/README.md"
+            git -C "$repo" add README.md
+            git -C "$repo" commit -m initial
+          done
+
+          prefix='CA_TEST_SECRET_'
+          suffix='ABCDEFGHIJKLMNOP'
+          printf 'fixture=%s%s\n' "$prefix" "$suffix" > artifacts/repos/history/historical.txt
+          git -C artifacts/repos/history add historical.txt
+          git -C artifacts/repos/history commit -m 'add historical fixture'
+          rm artifacts/repos/history/historical.txt
+          git -C artifacts/repos/history add -u
+          git -C artifacts/repos/history commit -m 'remove historical fixture'
+
+      - name: Prove clean repository control
+        run: bin/credential-auditor --repo artifacts/repos/clean --out artifacts/clean-report.json
+
+      - name: Prove historical-only finding control
+        run: |
+          set +e
+          bin/credential-auditor --repo artifacts/repos/history --out artifacts/history-report.json
+          status=$?
+          set -e
+          test "$status" -eq 2
+
+      - name: Prove incomplete-scope indeterminate control
+        run: |
+          nonrepo=$(mktemp -d)
+          set +e
+          bin/credential-auditor --repo "$nonrepo" --out artifacts/indeterminate-report.json
+          status=$?
+          set -e
+          test "$status" -eq 3
+
+      - name: Verify evidence semantics
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          clean = json.loads(Path("artifacts/clean-report.json").read_text())
+          assert clean["outcome"] == "PASS"
+          assert clean["reachable_objects"] > 0
+          assert clean["reachable_blobs"] > 0
+          assert "refs/heads/main" in clean["refs"]
+
+          history = json.loads(Path("artifacts/history-report.json").read_text())
+          assert history["outcome"] == "FINDINGS"
+          assert any(
+              finding["scope"] == "reachable-history"
+              and finding["detector_id"] == "credential-auditor-fixture"
+              for finding in history["findings"]
+          )
+          synthetic = "CA_TEST_SECRET_" + "ABCDEFGHIJKLMNOP"
+          assert synthetic not in json.dumps(history)
+
+          indeterminate = json.loads(Path("artifacts/indeterminate-report.json").read_text())
+          assert indeterminate["outcome"] == "INDETERMINATE"
+          assert indeterminate["errors"]
+          PY
+
+      - name: Upload audit evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: credential-auditor-v0
+          path: artifacts/*-report.json
+          if-no-files-found: error
