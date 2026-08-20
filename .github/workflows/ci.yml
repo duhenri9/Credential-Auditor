@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+env:
+  GOTELEMETRY: "off"
+  GOTOOLCHAIN: local
+
 jobs:
   validate:
     runs-on: ubuntu-24.04
@@ -30,6 +34,7 @@ jobs:
         run: |
           go version
           git version
+          go env GOTELEMETRY
 
       - name: Format check
         run: test -z "$(gofmt -l .)"
@@ -40,27 +45,49 @@ jobs:
       - name: Test
         run: go test ./... -count=1
 
-      - name: Build CLI
-        run: go build -trimpath -o bin/credential-auditor ./cmd/credential-auditor
+      - name: Build CLI outside worktree
+        run: go build -trimpath -o "$RUNNER_TEMP/credential-auditor" ./cmd/credential-auditor
 
       - name: Prove repository pre-publication gate
         run: |
-          bin/credential-auditor \
+          set +e
+          "$RUNNER_TEMP/credential-auditor" \
             --repo . \
             --out artifacts/self-report.json \
             --operator-out artifacts/self-report.txt
+          status=$?
+          set -e
+
+          # The repository's public history intentionally contains one synthetic
+          # detector fixture. The self-audit may return FINDINGS (2) only for that
+          # exact bounded case; every other finding or any coverage error fails.
+          test "$status" -eq 2
+
           python - <<'PY'
           import json
           from pathlib import Path
 
           report = json.loads(Path("artifacts/self-report.json").read_text())
           operator = Path("artifacts/self-report.txt").read_text()
-          assert report["outcome"] == "PASS"
+
+          assert report["outcome"] == "FINDINGS"
+          assert report["errors"] == []
           assert report["report_sha256"]
           assert report["reachable_objects"] > 0
           assert report["reachable_blobs"] > 0
           assert report["report_sha256"] in operator
           assert "PASS means only" in operator
+
+          findings = report["findings"]
+          assert findings, "expected the known synthetic historical fixture"
+          expected = {
+              "detector_id": "credential-auditor-fixture",
+              "scope": "reachable-history",
+              "path": "internal/audit/audit_test.go",
+          }
+          for finding in findings:
+              observed = {key: finding.get(key) for key in expected}
+              assert observed == expected, f"unexpected self-audit finding: {finding}"
           PY
 
       - name: Build integration fixture repositories
@@ -88,7 +115,7 @@ jobs:
 
       - name: Prove clean repository control
         run: |
-          bin/credential-auditor \
+          "$RUNNER_TEMP/credential-auditor" \
             --repo artifacts/repos/clean \
             --out artifacts/clean-report.json \
             --operator-out artifacts/clean-report.txt
@@ -96,7 +123,7 @@ jobs:
       - name: Prove historical-only finding control
         run: |
           set +e
-          bin/credential-auditor \
+          "$RUNNER_TEMP/credential-auditor" \
             --repo artifacts/repos/history \
             --out artifacts/history-report.json \
             --operator-out artifacts/history-report.txt
@@ -108,7 +135,7 @@ jobs:
         run: |
           nonrepo=$(mktemp -d)
           set +e
-          bin/credential-auditor \
+          "$RUNNER_TEMP/credential-auditor" \
             --repo "$nonrepo" \
             --out artifacts/indeterminate-report.json \
             --operator-out artifacts/indeterminate-report.txt
