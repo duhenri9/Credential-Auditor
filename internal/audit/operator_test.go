@@ -7,10 +7,10 @@ import (
 
 func TestRenderOperatorReportIsDeterministicAndRedacted(t *testing.T) {
 	report := Report{
-		Outcome:       Findings,
-		Head:          "abc123",
-		Refs:          []string{"refs/tags/v1", "refs/heads/main"},
-		DetectorIDs:   []string{"private-key-header", "credential-auditor-fixture"},
+		Outcome:          Findings,
+		Head:             "abc123",
+		Refs:             []string{"refs/tags/v1", "refs/heads/main"},
+		DetectorIDs:      []string{"private-key-header", "credential-auditor-fixture"},
 		ReachableObjects: 9,
 		ReachableBlobs:   4,
 		Findings: []Finding{
