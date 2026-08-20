@@ -15,6 +15,7 @@ import (
 func main() {
 	repo := flag.String("repo", ".", "Git worktree to audit")
 	out := flag.String("out", "", "optional JSON report path")
+	operatorOut := flag.String("operator-out", "", "optional human-readable operator report path")
 	timeout := flag.Duration("timeout", 30*time.Second, "overall audit timeout")
 	flag.Parse()
 
@@ -30,12 +31,16 @@ func main() {
 	encoded = append(encoded, '\n')
 
 	if *out != "" {
-		if err := os.MkdirAll(filepath.Dir(*out), 0o755); err != nil {
-			fmt.Fprintln(os.Stderr, "failed to create report directory")
+		if err := writeEvidenceFile(*out, encoded); err != nil {
+			fmt.Fprintln(os.Stderr, "failed to write JSON report")
 			os.Exit(3)
 		}
-		if err := os.WriteFile(*out, encoded, 0o600); err != nil {
-			fmt.Fprintln(os.Stderr, "failed to write report")
+	}
+
+	if *operatorOut != "" {
+		operator := []byte(audit.RenderOperatorReport(report))
+		if err := writeEvidenceFile(*operatorOut, operator); err != nil {
+			fmt.Fprintln(os.Stderr, "failed to write operator report")
 			os.Exit(3)
 		}
 	}
@@ -49,4 +54,12 @@ func main() {
 	default:
 		os.Exit(3)
 	}
+}
+
+func writeEvidenceFile(path string, data []byte) error {
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o600)
 }

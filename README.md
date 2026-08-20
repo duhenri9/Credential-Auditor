@@ -8,7 +8,7 @@ Credential Auditor is an open-source Go CLI focused on a bounded question:
 
 The goal is **not** to claim perfect secret detection. The goal is to produce reproducible, safely redacted evidence about the checks that actually ran.
 
-## V0
+## Evidence pipeline
 
 ```text
 working tree + staged files + local refs + reachable Git objects
@@ -17,12 +17,16 @@ working tree + staged files + local refs + reachable Git objects
                          ↓
               redacted findings/evidence
                          ↓
-          coverage + deterministic report digest
+       JSON report + operator report + digest
                          ↓
             PASS | FINDINGS | INDETERMINATE
+                         ↓
+          optional fail-closed CI publication gate
 ```
 
-### What V0 proves
+## V0 — local Git evidence CLI
+
+V0 proves:
 
 - canonicalisation to the containing Git worktree root;
 - current tracked and untracked non-ignored file scanning;
@@ -36,28 +40,39 @@ working tree + staged files + local refs + reachable Git objects
 - explicit incomplete-scope behaviour;
 - deterministic report SHA-256.
 
-### What V0 does not prove
+## V0.2 — CI / pre-publication gate
 
-- mathematical absence of secrets;
-- validity or liveness of a detected credential;
-- remote-ref coverage for refs that were never fetched locally;
-- files/blobs above the declared 2 MiB V0 bound;
-- full SAST or repository security;
-- superiority to or replacement of GitHub Secret Scanning, Push Protection, Gitleaks or TruffleHog;
-- production readiness.
+V0.2 adds an operator-facing evidence layer and a reusable publication-gate pattern without changing the bounded detector claim.
 
-## Build and run
+It adds:
+
+- deterministic `--operator-out` text derived only from the already-redacted JSON report;
+- report SHA-256 printed in the operator summary to bind human and machine evidence;
+- fail-closed CI semantics: only `PASS` exits 0;
+- full selected-history checkout guidance with `fetch-depth: 0` and tags;
+- `persist-credentials: false` and read-only GitHub workflow permissions;
+- pinned GitHub Actions template;
+- a self-audit gate on Credential Auditor's own repository;
+- CI proof that the operator and JSON reports never contain the synthetic matched value;
+- optional redacted-report artifact retention; source/content upload to a hosted scanner is not required.
 
 ```bash
 go build -trimpath -o credential-auditor ./cmd/credential-auditor
-./credential-auditor --repo /path/to/repository --out audit-report.json
+./credential-auditor \
+  --repo /path/to/repository \
+  --out audit-report.json \
+  --operator-out audit-report.txt
 ```
 
-Exit codes:
+See [`docs/CI_GATE_V02.md`](docs/CI_GATE_V02.md) and the pinned example in [`examples/github-actions/credential-audit.yml`](examples/github-actions/credential-audit.yml).
 
-- `0` — `PASS`;
-- `2` — `FINDINGS`;
-- `3` — `INDETERMINATE` or report/runtime failure.
+## Exit semantics
+
+- `0` — `PASS`: the declared scan completed and no configured detector matched;
+- `2` — `FINDINGS`: stop publication and investigate;
+- `3` — `INDETERMINATE` or evidence/runtime failure: stop publication because coverage could not be completed safely.
+
+Do not convert exits 2 or 3 to success in a publication gate.
 
 ## Report model
 
@@ -65,15 +80,29 @@ The JSON report records:
 
 - HEAD identity when available;
 - all refs observed locally;
-- configured detector ids;
+- configured detector IDs;
 - working/staged file counts;
 - reachable object/blob counts;
-- redacted finding locations with detector, scope, path, object id and line when available;
+- redacted finding locations with detector, scope, path, object ID and line when available;
 - explicit coverage errors;
 - claim boundary;
 - deterministic report SHA-256.
 
-Matched secret values are intentionally absent from the report.
+The operator report records the same bounded state in review-friendly text. Matched secret values are intentionally absent from both outputs.
+
+## Claim boundary
+
+Credential Auditor does **not** prove:
+
+- mathematical absence of secrets;
+- validity or liveness of a detected credential;
+- remote-ref coverage for refs that were never fetched locally;
+- files/blobs above the declared 2 MiB V0 bound;
+- full SAST or repository security;
+- superiority to or replacement of GitHub Secret Scanning/Push Protection, Gitleaks or TruffleHog;
+- production readiness.
+
+`fetch-depth: 0` prevents a shallow selected-history scan, but it does not prove every remote-only ref from every hosting system was fetched. If your release policy requires additional refs, fetch them explicitly and treat that fetch policy as part of the evidence contract.
 
 See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for Git coverage semantics, size limits and the performance boundary. The staged roadmap is tracked in issue #1.
 
@@ -86,7 +115,7 @@ go test ./... -count=1
 go build ./cmd/credential-auditor
 ```
 
-CI additionally builds real temporary Git repositories and proves clean, historical-only and incomplete-scope controls before uploading redacted evidence reports.
+CI proves the repository self-gate plus clean, historical-only and incomplete-scope controls and uploads only redacted evidence outputs.
 
 ## Security
 
