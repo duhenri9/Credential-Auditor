@@ -1,6 +1,7 @@
 name: public-portfolio-credential-audit
 
 on:
+  pull_request:
   push:
     branches:
       - audit/public-portfolio-2026-08-20
