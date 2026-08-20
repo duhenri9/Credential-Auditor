@@ -1,0 +1,140 @@
+name: public-portfolio-credential-audit
+
+on:
+  push:
+    branches:
+      - audit/public-portfolio-2026-08-20
+
+permissions:
+  contents: read
+
+env:
+  GOTELEMETRY: "off"
+  GOTOOLCHAIN: local
+
+jobs:
+  audit-seven-public-repositories:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout Credential Auditor
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          fetch-tags: true
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Build auditor outside worktree
+        run: go build -trimpath -o "$RUNNER_TEMP/credential-auditor" ./cmd/credential-auditor
+
+      - name: Clone and fetch every public branch/tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/portfolio" artifacts/portfolio-audit
+          repos=(
+            ActionSeam
+            llm-oxigenio-brasil
+            wm3-request-protocol
+            RepoOps
+            Debug-Evidence
+            Credential-Auditor
+            ChainEvidence
+          )
+          for repo in "${repos[@]}"; do
+            git clone --quiet "https://github.com/duhenri9/${repo}.git" "$RUNNER_TEMP/portfolio/${repo}"
+            git -C "$RUNNER_TEMP/portfolio/${repo}" fetch --force --prune origin \
+              '+refs/heads/*:refs/remotes/origin/*' \
+              '+refs/tags/*:refs/tags/*'
+          done
+
+      - name: Audit all reachable public Git objects
+        shell: bash
+        run: |
+          set -euo pipefail
+          repos=(
+            ActionSeam
+            llm-oxigenio-brasil
+            wm3-request-protocol
+            RepoOps
+            Debug-Evidence
+            Credential-Auditor
+            ChainEvidence
+          )
+
+          printf 'repository\toutcome\tfindings\terrors\treport_sha256\n' > artifacts/portfolio-audit/summary.tsv
+
+          for repo in "${repos[@]}"; do
+            set +e
+            "$RUNNER_TEMP/credential-auditor" \
+              --repo "$RUNNER_TEMP/portfolio/${repo}" \
+              --out "artifacts/portfolio-audit/${repo}.json" \
+              --operator-out "artifacts/portfolio-audit/${repo}.txt"
+            status=$?
+            set -e
+
+            python - "$repo" "$status" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          repo = sys.argv[1]
+          status = int(sys.argv[2])
+          path = Path(f"artifacts/portfolio-audit/{repo}.json")
+          report = json.loads(path.read_text())
+          outcome = report["outcome"]
+          findings = report["findings"]
+          errors = report["errors"]
+          digest = report["report_sha256"]
+
+          if repo == "Credential-Auditor":
+              expected = {
+                  "detector_id": "credential-auditor-fixture",
+                  "scope": "reachable-history",
+                  "path": "internal/audit/audit_test.go",
+              }
+              assert status == 2, (repo, status, outcome)
+              assert outcome == "FINDINGS", (repo, outcome)
+              assert errors == [], (repo, errors)
+              assert findings, "expected the repository's synthetic detector fixture"
+              for finding in findings:
+                  observed = {key: finding.get(key) for key in expected}
+                  assert observed == expected, f"unexpected Credential-Auditor finding: {finding}"
+              public_outcome = "PASS_EXPECTED_SYNTHETIC_FIXTURE"
+          else:
+              assert status == 0, (repo, status, outcome)
+              assert outcome == "PASS", (repo, outcome)
+              assert findings == [], (repo, findings)
+              assert errors == [], (repo, errors)
+              public_outcome = "PASS"
+
+          with Path("artifacts/portfolio-audit/summary.tsv").open("a") as handle:
+              handle.write(
+                  f"{repo}\t{public_outcome}\t{len(findings)}\t{len(errors)}\t{digest}\n"
+              )
+          PY
+          done
+
+      - name: Verify reports are redacted and complete
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(wc -l < artifacts/portfolio-audit/summary.tsv)" -eq 8
+          ! grep -R -E --binary-files=without-match \
+            '(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|AIza[0-9A-Za-z_-]{35}|-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----)' \
+            artifacts/portfolio-audit/*.json \
+            artifacts/portfolio-audit/*.txt
+          cat artifacts/portfolio-audit/summary.tsv
+
+      - name: Upload redacted portfolio audit evidence
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: public-portfolio-credential-audit-2026-08-20
+          path: artifacts/portfolio-audit/
+          if-no-files-found: error
