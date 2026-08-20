@@ -10,20 +10,26 @@ permissions:
 
 jobs:
   validate:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
-      - name: Checkout
+      - name: Checkout full selected history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
+          fetch-tags: true
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Tool identities
+        run: |
+          go version
+          git version
 
       - name: Format check
         run: test -z "$(gofmt -l .)"
@@ -36,6 +42,26 @@ jobs:
 
       - name: Build CLI
         run: go build -trimpath -o bin/credential-auditor ./cmd/credential-auditor
+
+      - name: Prove repository pre-publication gate
+        run: |
+          bin/credential-auditor \
+            --repo . \
+            --out artifacts/self-report.json \
+            --operator-out artifacts/self-report.txt
+          python - <<'PY'
+          import json
+          from pathlib import Path
+
+          report = json.loads(Path("artifacts/self-report.json").read_text())
+          operator = Path("artifacts/self-report.txt").read_text()
+          assert report["outcome"] == "PASS"
+          assert report["report_sha256"]
+          assert report["reachable_objects"] > 0
+          assert report["reachable_blobs"] > 0
+          assert report["report_sha256"] in operator
+          assert "PASS means only" in operator
+          PY
 
       - name: Build integration fixture repositories
         run: |
@@ -61,12 +87,19 @@ jobs:
           git -C artifacts/repos/history commit -m 'remove historical fixture'
 
       - name: Prove clean repository control
-        run: bin/credential-auditor --repo artifacts/repos/clean --out artifacts/clean-report.json
+        run: |
+          bin/credential-auditor \
+            --repo artifacts/repos/clean \
+            --out artifacts/clean-report.json \
+            --operator-out artifacts/clean-report.txt
 
       - name: Prove historical-only finding control
         run: |
           set +e
-          bin/credential-auditor --repo artifacts/repos/history --out artifacts/history-report.json
+          bin/credential-auditor \
+            --repo artifacts/repos/history \
+            --out artifacts/history-report.json \
+            --operator-out artifacts/history-report.txt
           status=$?
           set -e
           test "$status" -eq 2
@@ -75,12 +108,15 @@ jobs:
         run: |
           nonrepo=$(mktemp -d)
           set +e
-          bin/credential-auditor --repo "$nonrepo" --out artifacts/indeterminate-report.json
+          bin/credential-auditor \
+            --repo "$nonrepo" \
+            --out artifacts/indeterminate-report.json \
+            --operator-out artifacts/indeterminate-report.txt
           status=$?
           set -e
           test "$status" -eq 3
 
-      - name: Verify evidence semantics
+      - name: Verify evidence semantics and redaction
         run: |
           python - <<'PY'
           import json
@@ -91,6 +127,7 @@ jobs:
           assert clean["reachable_objects"] > 0
           assert clean["reachable_blobs"] > 0
           assert "refs/heads/main" in clean["refs"]
+          assert clean["report_sha256"] in Path("artifacts/clean-report.txt").read_text()
 
           history = json.loads(Path("artifacts/history-report.json").read_text())
           assert history["outcome"] == "FINDINGS"
@@ -100,16 +137,25 @@ jobs:
               for finding in history["findings"]
           )
           synthetic = "CA_TEST_SECRET_" + "ABCDEFGHIJKLMNOP"
-          assert synthetic not in json.dumps(history)
+          rendered_history = json.dumps(history)
+          operator_history = Path("artifacts/history-report.txt").read_text()
+          assert synthetic not in rendered_history
+          assert synthetic not in operator_history
+          assert history["report_sha256"] in operator_history
 
           indeterminate = json.loads(Path("artifacts/indeterminate-report.json").read_text())
           assert indeterminate["outcome"] == "INDETERMINATE"
           assert indeterminate["errors"]
+          assert indeterminate["report_sha256"] in Path(
+              "artifacts/indeterminate-report.txt"
+          ).read_text()
           PY
 
-      - name: Upload audit evidence
+      - name: Upload redacted audit evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: credential-auditor-v0
-          path: artifacts/*-report.json
+          name: credential-auditor-v02
+          path: |
+            artifacts/*-report.json
+            artifacts/*-report.txt
           if-no-files-found: error
