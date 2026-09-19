@@ -8,6 +8,22 @@ Credential Auditor is an open-source Go CLI focused on a bounded question:
 
 The goal is **not** to claim perfect secret detection. The goal is to produce reproducible, safely redacted evidence about the checks that actually ran.
 
+
+## 60–90 second review
+
+**What this demonstrates:** a Go security CLI that makes Git credential-hygiene claims auditable: it records the exact repository/history scope inspected, detector coverage, redacted findings and an explicit PASS / FINDINGS / INDETERMINATE result.
+
+**Fast local proof:** build a single binary and scan a repository without uploading source or matched credential values to a hosted scanner.
+
+~~~bash
+go build -trimpath -o credential-auditor ./cmd/credential-auditor
+./credential-auditor --repo /path/to/repository --out audit-report.json --operator-out audit-report.txt
+~~~
+
+**Engineering path:** review the evidence pipeline below, then [ARCHITECTURE](docs/ARCHITECTURE.md), the [CI/publication gate](docs/CI_GATE_V02.md), synthetic history-only controls and the repository's own self-audit CI.
+
+**Evidence boundary:** PASS means the declared scan completed for the configured detector classes and locally available/fetched scope. It is not a mathematical proof that no secret exists and does not replace provider-side secret scanning.
+
 ## Evidence pipeline
 
 ```text

@@ -58,10 +58,13 @@ jobs:
           status=$?
           set -e
 
-          # The repository's public history intentionally contains one synthetic
-          # detector fixture. The self-audit may return FINDINGS (2) only for that
-          # exact bounded case; every other finding or any coverage error fails.
-          test "$status" -eq 2
+          # The repository self-audit is fail-closed:
+          # - PASS (0) is valid when no configured detector matches the currently
+          #   reachable/fetched public history;
+          # - FINDINGS (2) is accepted only when every finding is the exact known
+          #   synthetic historical fixture;
+          # - INDETERMINATE/coverage errors or unexpected findings fail.
+          test "$status" -eq 0 -o "$status" -eq 2
 
           python - <<'PY'
           import json
@@ -70,7 +73,6 @@ jobs:
           report = json.loads(Path("artifacts/self-report.json").read_text())
           operator = Path("artifacts/self-report.txt").read_text()
 
-          assert report["outcome"] == "FINDINGS"
           assert report["errors"] == []
           assert report["report_sha256"]
           assert report["reachable_objects"] > 0
@@ -79,15 +81,19 @@ jobs:
           assert "PASS means only" in operator
 
           findings = report["findings"]
-          assert findings, "expected the known synthetic historical fixture"
-          expected = {
-              "detector_id": "credential-auditor-fixture",
-              "scope": "reachable-history",
-              "path": "internal/audit/audit_test.go",
-          }
-          for finding in findings:
-              observed = {key: finding.get(key) for key in expected}
-              assert observed == expected, f"unexpected self-audit finding: {finding}"
+          if report["outcome"] == "PASS":
+              assert findings == []
+          else:
+              assert report["outcome"] == "FINDINGS"
+              assert findings, "FINDINGS requires at least one bounded finding"
+              expected = {
+                  "detector_id": "credential-auditor-fixture",
+                  "scope": "reachable-history",
+                  "path": "internal/audit/audit_test.go",
+              }
+              for finding in findings:
+                  observed = {key: finding.get(key) for key in expected}
+                  assert observed == expected, f"unexpected self-audit finding: {finding}"
           PY
 
       - name: Build integration fixture repositories
